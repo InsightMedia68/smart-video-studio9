@@ -10,28 +10,30 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "No script content provided." });
     }
 
-    const prompt = `Dưới đây là một đoạn kịch bản video:
-
-${scriptContent}
-
-Trích xuất tối đa 15 từ khóa quan trọng nhất liên quan đến nội dung. 
-Chỉ trả về JSON đúng như sau, không thêm chữ nào khác ngoài JSON:
+    const prompt = `
+Bạn sẽ nhận một kịch bản video. Nhiệm vụ của bạn: 
+1. Trích xuất tối đa 15 từ khóa quan trọng nhất liên quan đến nội dung.
+2. Trả về dưới dạng JSON CHUẨN theo đúng mẫu sau. Tuyệt đối không được thêm bất kỳ chữ nào khác ngoài JSON:
 
 {
   "keywords": ["từ khóa 1", "từ khóa 2", "từ khóa 3"]
-}`;
+}
+
+Kịch bản: 
+${scriptContent}
+`;
 
     const apiKey = process.env.OPENROUTER_API_KEY;
-    const model = process.env.OPENROUTER_MODEL_ID || "openai/gpt-4o";
+    const model = process.env.OPENROUTER_MODEL_ID || "openai/gpt-3.5-turbo";
 
     if (!apiKey) {
       return res.status(500).json({ error: "Missing OPENROUTER_API_KEY" });
     }
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const fetchResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -39,7 +41,7 @@ Chỉ trả về JSON đúng như sau, không thêm chữ nào khác ngoài JSON
         messages: [
           {
             role: "system",
-            content: "Bạn là một công cụ JSON parser. Luôn luôn chỉ trả về JSON hợp lệ."
+            content: "Bạn là công cụ JSON parser. Luôn trả về JSON đúng chuẩn. Không được ghi thêm chữ nào."
           },
           {
             role: "user",
@@ -50,44 +52,43 @@ Chỉ trả về JSON đúng như sau, không thêm chữ nào khác ngoài JSON
       })
     });
 
-    const rawData = await response.text();
+    const rawText = await fetchResponse.text();
 
-    if (!response.ok) {
-      return res.status(500).json({ error: "OpenRouter returned an error", details: rawData });
+    if (!fetchResponse.ok) {
+      return res.status(500).json({ error: "AI API error", detail: rawText });
     }
 
-    let data;
+    let json;
     try {
-      data = JSON.parse(rawData);
+      json = JSON.parse(rawText);
     } catch (e) {
-      return res.status(500).json({ error: "AI response does not contain valid JSON.", raw: rawData });
+      return res.status(500).json({ error: "AI response not valid JSON", raw: rawText });
     }
 
-    const aiContent = data.choices?.[0]?.message?.content?.trim();
-    if (!aiContent) {
-      return res.status(400).json({ error: "AI returned an empty response." });
+    const content = json?.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+      return res.status(400).json({ error: "AI returned an empty response.", raw: rawText });
     }
 
-    const match = aiContent.match(/\{[\s\S]*\}/);
-    if (!match) {
-      return res.status(400).json({ error: "AI response is not valid JSON." });
+    const jsonBlock = content.match(/\{[\s\S]*\}/);
+    if (!jsonBlock) {
+      return res.status(400).json({ error: "AI response is not valid JSON.", aiContent: content });
     }
 
-    let parsed;
+    let result;
     try {
-      parsed = JSON.parse(match[0]);
+      result = JSON.parse(jsonBlock[0]);
     } catch (e) {
-      return res.status(400).json({ error: "Could not parse extracted JSON from AI.", raw: aiContent });
+      return res.status(400).json({ error: "Could not parse JSON block.", jsonBlock: jsonBlock[0] });
     }
 
-    if (!parsed.keywords || !Array.isArray(parsed.keywords)) {
-      return res.status(400).json({ error: "JSON does not contain valid 'keywords' array." });
+    if (!Array.isArray(result.keywords)) {
+      return res.status(400).json({ error: "Missing 'keywords' array in result.", result });
     }
 
-    return res.status(200).json({ result: parsed });
+    return res.status(200).json({ result });
 
   } catch (err) {
-    console.error("Unhandled Error:", err);
-    return res.status(500).json({ error: "Internal server error.", details: err.message });
+    return res.status(500).json({ error: "Unhandled server error", detail: err.message });
   }
 }
