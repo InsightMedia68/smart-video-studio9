@@ -1,94 +1,77 @@
-export default async function handler(req, res) {
+export default async function handler(request, response) {
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed. Use POST." });
+    if (request.method !== "POST") {
+      return response.status(405).json({ error: "Method not allowed. Use POST." });
     }
 
-    const { scriptContent } = req.body;
+    const { scriptContent } = request.body;
 
-    if (!scriptContent || scriptContent.trim().length === 0) {
-      return res.status(400).json({ error: "No script content provided." });
+    if (!scriptContent || typeof scriptContent !== "string" || scriptContent.trim().length === 0) {
+      return response.status(400).json({ error: "No script content provided." });
     }
-
-    const prompt = `
-Bạn sẽ nhận một kịch bản video. Nhiệm vụ của bạn: 
-1. Trích xuất tối đa 15 từ khóa quan trọng nhất liên quan đến nội dung.
-2. Trả về dưới dạng JSON CHUẨN theo đúng mẫu sau. Tuyệt đối không được thêm bất kỳ chữ nào khác ngoài JSON:
-
-{
-  "keywords": ["từ khóa 1", "từ khóa 2", "từ khóa 3"]
-}
-
-Kịch bản: 
-${scriptContent}
-`;
 
     const apiKey = process.env.OPENROUTER_API_KEY;
-    const model = process.env.OPENROUTER_MODEL_ID || "openai/gpt-3.5-turbo";
+    const model = process.env.OPENROUTER_MODEL_ID || "openai/gpt-4o";
 
     if (!apiKey) {
-      return res.status(500).json({ error: "Missing OPENROUTER_API_KEY" });
+      return response.status(500).json({ error: "Missing OPENROUTER_API_KEY" });
     }
 
-    const fetchResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const prompt = `Dưới đây là một đoạn kịch bản video:\n\n${scriptContent}\n\nHãy trích xuất tối đa 15 từ khóa quan trọng nhất liên quan đến nội dung trên. Chỉ trả về đúng định dạng JSON như sau, KHÔNG thêm gì khác ngoài JSON:\n\n{\n  "keywords": ["từ khóa 1", "từ khóa 2", "từ khóa 3"]\n}`;
+
+    console.log("✅ [Prompt gửi lên AI]:\n", prompt);
+
+    const aiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
       },
       body: JSON.stringify({
-        model: model,
-        messages: [
-          {
-            role: "system",
-            content: "Bạn là công cụ JSON parser. Luôn trả về JSON đúng chuẩn. Không được ghi thêm chữ nào."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.2
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3
       })
     });
 
-    const rawText = await fetchResponse.text();
-
-    if (!fetchResponse.ok) {
-      return res.status(500).json({ error: "AI API error", detail: rawText });
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error("❌ [AI API error raw text]:\n", errText);
+      return response.status(aiRes.status).json({ error: "AI API error", detail: errText });
     }
 
-    let json;
+    const data = await aiRes.json();
+
+    const raw = data?.choices?.[0]?.message?.content?.trim();
+
+    console.log("✅ [Phản hồi từ AI]:\n", raw);
+
+    if (!raw) {
+      return response.status(400).json({ error: "AI returned an empty response." });
+    }
+
+    const jsonMatch = raw.match(/\{[\s\S]*?\}/);
+
+    if (!jsonMatch || jsonMatch.length === 0) {
+      return response.status(400).json({ error: "AI response does not contain valid JSON." });
+    }
+
+    let parsed;
     try {
-      json = JSON.parse(rawText);
-    } catch (e) {
-      return res.status(500).json({ error: "AI response not valid JSON", raw: rawText });
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (err) {
+      console.error("❌ [Lỗi parse JSON]:", err);
+      return response.status(400).json({ error: "Could not parse JSON from AI response." });
     }
 
-    const content = json?.choices?.[0]?.message?.content?.trim();
-    if (!content) {
-      return res.status(400).json({ error: "AI returned an empty response.", raw: rawText });
+    if (!parsed.keywords || !Array.isArray(parsed.keywords)) {
+      return response.status(400).json({ error: "JSON does not contain valid 'keywords' array." });
     }
 
-    const jsonBlock = content.match(/\{[\s\S]*\}/);
-    if (!jsonBlock) {
-      return res.status(400).json({ error: "AI response is not valid JSON.", aiContent: content });
-    }
-
-    let result;
-    try {
-      result = JSON.parse(jsonBlock[0]);
-    } catch (e) {
-      return res.status(400).json({ error: "Could not parse JSON block.", jsonBlock: jsonBlock[0] });
-    }
-
-    if (!Array.isArray(result.keywords)) {
-      return res.status(400).json({ error: "Missing 'keywords' array in result.", result });
-    }
-
-    return res.status(200).json({ result });
-
+    return response.status(200).json({ result: parsed });
   } catch (err) {
-    return res.status(500).json({ error: "Unhandled server error", detail: err.message });
+    console.error("❌ [Lỗi không xác định]:", err);
+    return response.status(500).json({ error: "Internal server error" });
   }
 }
