@@ -10,15 +10,15 @@ export default async function handler(request, response) {
       return response.status(400).json({ error: "No script content provided." });
     }
 
-    const prompt = `Extract up to 15 relevant keywords from the script below.
+    const prompt = `Dưới đây là một đoạn kịch bản video:
 
-Script:
 ${scriptContent}
 
-Only return JSON in this exact format. Do not add any explanation or extra text:
+Trích xuất tối đa 15 từ khóa quan trọng nhất có liên quan đến nội dung.
+Chỉ trả về JSON như ví dụ sau, KHÔNG thêm bất kỳ chữ nào khác ngoài JSON:
 
 {
-  "keywords": ["keyword1", "keyword2", "keyword3"]
+  "keywords": ["từ khóa 1", "từ khóa 2", "từ khóa 3"]
 }`;
 
     const apiKey = process.env.OPENROUTER_API_KEY;
@@ -38,19 +38,22 @@ Only return JSON in this exact format. Do not add any explanation or extra text:
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-        stop: ["\n\n", "---"]
+        temperature: 0.3
       })
     });
 
-    const data = await apiResponse.json();
+    if (!apiResponse.ok) {
+      const errorDetail = await apiResponse.text();
+      return response.status(500).json({ error: "AI API error", detail: errorDetail });
+    }
 
-    const content = data?.choices?.[0]?.message?.content?.trim();
+    const data = await apiResponse.json();
+    const content = data.choices?.[0]?.message?.content?.trim();
+
     if (!content) {
       return response.status(400).json({ error: "AI returned an empty response." });
     }
 
-    // Lấy phần JSON trong nội dung
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return response.status(400).json({ error: "AI response does not contain valid JSON." });
@@ -59,8 +62,8 @@ Only return JSON in this exact format. Do not add any explanation or extra text:
     let parsed;
     try {
       parsed = JSON.parse(jsonMatch[0]);
-    } catch (e) {
-      return response.status(400).json({ error: "Could not parse JSON from AI response." });
+    } catch (err) {
+      return response.status(400).json({ error: "Could not parse extracted JSON from AI." });
     }
 
     if (!parsed.keywords || !Array.isArray(parsed.keywords)) {
@@ -68,12 +71,8 @@ Only return JSON in this exact format. Do not add any explanation or extra text:
     }
 
     return response.status(200).json({ result: parsed });
-
   } catch (err) {
-    console.error("API Error:", err);
-    return response.status(500).json({
-      error: "AI API error",
-      detail: err.message || err
-    });
+    console.error("Unexpected error:", err);
+    return response.status(500).json({ error: "Internal server error." });
   }
 }
