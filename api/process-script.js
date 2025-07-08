@@ -71,10 +71,25 @@ export default async function handler(request, response) {
             });
         }
         
-        const responseBody = await apiResponse.text();
-        
-        response.setHeader('Content-Type', 'application/json');
-        return response.status(200).send(responseBody);
+                // Step 1: Phân tích cú pháp phản hồi từ OpenRouter dưới dạng JSON ngay trên server.
+        // Đây là bước xác thực quan trọng. Nếu phản hồi không phải là JSON hợp lệ,
+        // nó sẽ tạo ra một lỗi và được khối catch chính của chúng ta xử lý,
+        // ngăn chặn hàm bị sập và gửi đi một lỗi 500 không phải JSON.
+        const responseData = await apiResponse.json();
+
+        // Step 2: (Tùy chọn nhưng Rất khuyến khích) Xác thực cấu trúc của phản hồi.
+        // Điều này đảm bảo chúng ta không chuyển một cấu trúc không mong muốn cho client.
+        if (!responseData.choices || responseData.choices.length === 0 || !responseData.choices[0].message || !responseData.choices[0].message.content) {
+            console.error('CRITICAL: Cấu trúc dữ liệu không hợp lệ hoặc không đầy đủ từ OpenRouter API:', JSON.stringify(responseData));
+            return response.status(502).json({ 
+                error: 'Bad Gateway', 
+                message: 'Phản hồi từ dịch vụ AI không hợp lệ hoặc không đầy đủ.' 
+            });
+        }
+
+        // Step 3: Gửi đối tượng JSON đã được phân tích và xác thực thành công cho client.
+        // Mã phía client đã được thiết kế để xử lý cấu trúc đối tượng đầy đủ này.
+        return response.status(200).json(responseData);
 
     } catch (error) {
         console.error('An unexpected error occurred in process-script handler:', error);
